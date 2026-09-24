@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"ScreenLite 默认权限集","local":true,"windows":["main"],"permissions":["core:default","dialog:default","core:window:allow-set-size","core:window:allow-close","core:window:allow-show","core:window:allow-hide","core:window:allow-set-focus","core:window:allow-start-dragging"]}}

@@ -1,0 +1,960 @@
+/* ============================================================================
+   ScreenLite V0.3 悬浮 Dock 界面系统（FINAL VISUAL BASELINE 契约）
+   完全透明窗口外壳 + 三个独立悬浮 Island（macOS-like / refined glassmorphism）。
+   组织顺序：
+     1. 令牌        2. 透明外壳      3. Dock 壳与关闭钮
+     4. Island 表面 5. 岛内部控件    6. 动作行
+     7. 录制迷你条  8. 遥测面板      9. 设置形态
+    10. Toast/错误 11. 框选覆盖层   12. 拖拽光标
+   强约束（红线）：
+   - html.overlay-mode 及其子树必须 background: transparent（框选覆盖层依赖它）✓
+   - 数字/时间必须 tabular-nums（防跳动）✓
+   - 全局 box-sizing: border-box ✓
+   - background/border/shadow/backdrop/gradient 只允许出现在 Island 级表面，
+     绝不施加到 App 外壳✓
+   ========================================================================= */
+
+/* ============================== 1. 设计令牌 ============================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Island 表面。
+     ⚠️ 不放 backdrop-filter：
+     透明窗口里 backdrop-filter 会强制创建离屏合成层——它模糊不到桌面
+     （桌面属于另一个合成面），反而把**整个窗口矩形**渲染成半透明白/灰面、
+     边缘还带色偏细线（用户截图里的"白色半透明矩形+蓝色细线"即由此而来 ✗）。
+     玻璃质感改由 0.80 不透明度 + inset 顶部高光 + 柔影承担 ✓。 */
+  --dock-bg: rgba(24, 31, 43, 0.8);
+  --dock-border: rgba(255, 255, 255, 0.1);
+  --dock-border-hover: rgba(255, 255, 255, 0.22);
+  --dock-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --dock-divider: rgba(255, 255, 255, 0.08);
+  --dock-well: rgba(255, 255, 255, 0.05);
+  --dock-well-hover: rgba(255, 255, 255, 0.08);
+
+  --dock-text-primary: #ffffff;
+  --dock-text-secondary: #94a3b8;
+  --dock-text-muted: #64748b;
+  --dock-accent-blue: #0a84ff;
+  --dock-accent-blue-hover: #0071e3;
+  --dock-accent-green: #30d158;
+  --dock-accent-red: #ff453a;
+  --dock-accent-amber: #ff9f0a;
+
+  --dock-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --dock-font-mono: "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  --dock-radius: 18px;
+  --dock-radius-sm: 8px;
+  --dock-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dock-transition: 200ms var(--dock-ease);
+}
+
+/* ============================== 2. 透明外壳 ============================== */
+
+/* 全局盒模型：必须有（没有它 input 的 padding+border 会加到 flex 宽度上把行撑破） */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  /* 主窗口是透明窗口（悬浮岛本体才有底色），body 必须透明，否则整窗盖黑。
+     !important：任何后来的规则（含第三方/误加）都不得给根层上底色 */
+  background: transparent !important;
+  color: var(--dock-text-primary);
+  font-family: var(--dock-font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  /* `hidden` 不够，必须 `clip`：
+     `overflow: hidden` 只是**隐藏滚动条**，页面**仍然可以被滚动** ✗
+     （焦点移到屏幕外元素、或程序化 scrollIntoView 都会滚 ✓）。
+     `overflow: clip` 才真正**禁止滚动** ✓（现代 Chromium 支持 ✓；保留 hidden 作回退 ✓）。 */
+  overflow: hidden;
+  overflow: clip;
+}
+
+#root {
+  background: transparent !important;
+}
+
+/* 统一焦点环（契约：蓝色矩形边框必须彻底消失）。
+   Chromium 默认 focus ring 是**蓝色**——键盘焦点落在按钮上会描一圈蓝线 ✗。
+   换成浅色细环：保留键盘可达性，又不引入蓝色。 */
+:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 1px;
+}
+
+/* ============================== 3. Dock 壳与关闭钮 ============================== */
+
+/* 壳只有布局属性：禁止在这里加 background/border/shadow/backdrop/gradient */
+.dock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* 岛间距 */
+  gap: 10px;
+  padding: 14px 12px;
+  min-height: 100vh;
+}
+
+/* 关闭按钮（无边框窗口的关闭入口之一；另一个是托盘菜单"退出"。hover 才显现，平时隐形） */
+.dock-close {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dock-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: var(--dock-transition);
+  /* 必须高于一切 popover（1000）：设置/遥测打开时窗口关闭入口仍然可用 */
+  z-index: 1100;
+}
+
+.dock:hover .dock-close {
+  opacity: 1;
+}
+
+.dock-close:hover {
+  background: var(--dock-well-hover);
+  color: var(--dock-text-primary);
+}
+
+/* ============================== 4. Island 表面 ============================== */
+
+.island {
+  background: var(--dock-bg);
+  border: 1px solid var(--dock-border);
+  border-radius: var(--dock-radius);
+  /* 无 backdrop-filter：透明窗口里的合成层会把整窗渲染成半透明矩形（见令牌注释） */
+  box-shadow: var(--dock-shadow);
+  padding: 6px;
+  animation: island-in 240ms var(--dock-ease);
+}
+
+@keyframes island-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.island-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 岛内部留白 */
+  padding: 8px 12px;
+  /* 悬浮岛里不允许出现滚动条：空间不够就换行（实测反馈"还是有滚轮"） */
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 悬浮岛里的 flex/grid 子项都允许收缩，否则会把容器撑宽 ⇒ 整页出滚动条 */
+.island * {
+  min-width: 0;
+}
+
+.island-divider {
+  height: 1px;
+  background: var(--dock-divider);
+  margin: 0 10px;
+}
+
+/* Island 3 的轻微洋红边缘光（很轻——表达"这个按钮比较特别"，不是 RGB 发光） */
+.island-glow {
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    -2px 0 14px -4px rgba(236, 72, 153, 0.32);
+}
+
+/* ============================== 5. 岛内部控件 ============================== */
+
+.icon-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dock-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: var(--dock-transition);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--dock-well-hover);
+  color: var(--dock-text-primary);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.size-pill {
+  flex: 1 1 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--dock-border);
+  border-radius: 9999px;
+  background: var(--dock-well);
+  color: var(--dock-text-primary);
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--dock-transition);
+}
+
+.size-pill:hover {
+  background: var(--dock-well-hover);
+  border-color: var(--dock-border-hover);
+}
+
+.size-arrow {
+  color: var(--dock-text-secondary);
+  font-size: 12px;
+}
+
+/* 下层图标切换矩阵 */
+.island-icons {
+  display: grid;
+  /* 必须是 `minmax(0, 1fr)` 而不是 `1fr`：
+     `1fr` 的单元格**拒绝收缩到内容宽度以下** ✗ —— 里面 `60 fps` 这类文本会把单元格撑开，
+     把右端图标挤出窗口（实测：岛 1 右侧图标与 HUD 第 4 个指标被裁掉 ✓）。
+     `minmax(0, 1fr)` 允许单元格收缩，5 格严格等分 ✓。 */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding: 6px 8px 8px;
+  min-width: 0;
+}
+
+/* 单元格内容也不许再撑开（文本/图标超长就裁切，而不是把整行挤出去） */
+.island-icons > * {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.toggle-icon {
+  position: relative;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dock-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: var(--dock-transition);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.toggle-icon:hover:not(:disabled) {
+  background: var(--dock-well-hover);
+  color: var(--dock-text-primary);
+}
+
+.toggle-icon.on {
+  color: var(--dock-text-primary);
+  background: var(--dock-well);
+}
+
+.toggle-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.toggle-check {
+  position: absolute;
+  bottom: 1px;
+  right: 50%;
+  transform: translateX(50%);
+  font-size: 9px;
+  color: var(--dock-accent-green);
+  line-height: 1;
+}
+
+.toggle-icon.small {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.fps-badge {
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.fps-unit {
+  font-size: 9px;
+  color: var(--dock-text-muted);
+  margin-top: 4px;
+}
+
+/* ============================== 6. 动作行（Island 2 / 3） ============================== */
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--dock-text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--dock-transition);
+  text-align: left;
+}
+
+.action-row:hover:not(:disabled) {
+  background: var(--dock-well-hover);
+}
+
+.action-row:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.action-icon {
+  font-size: 15px;
+  flex: 0 0 auto;
+}
+
+.action-label {
+  flex: 1 1 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-row kbd {
+  flex: 0 0 auto;
+  font-family: var(--dock-font-mono);
+  font-size: 12px;
+  color: var(--dock-text-muted);
+  background: var(--dock-well);
+  border: 1px solid var(--dock-border);
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
+.help-dot {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--dock-border);
+  color: var(--dock-text-muted);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ============================== 7. 录制迷你条 ============================== */
+
+.minibar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 4px;
+  background: var(--dock-bg);
+  border: 1px solid var(--dock-border);
+  border-radius: 9999px;
+  box-shadow: var(--dock-shadow);
+  animation: island-in 240ms var(--dock-ease);
+}
+
+.minibar-main {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--dock-text-primary);
+  cursor: pointer;
+  transition: var(--dock-transition);
+}
+
+.minibar-main:hover {
+  background: var(--dock-well-hover);
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dock-accent-red);
+  animation: dock-pulse 1.5s var(--dock-ease) infinite;
+  flex: 0 0 auto;
+}
+
+@keyframes dock-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.8);
+  }
+}
+
+.rec-time {
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+
+.rec-warn {
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--dock-accent-amber);
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.3);
+  border-radius: 9999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.rec-stop {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--dock-accent-red);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(255, 69, 58, 0.4);
+  transition: var(--dock-transition);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rec-stop:hover:not(:disabled) {
+  background: #d93a31;
+  box-shadow: 0 3px 14px rgba(255, 69, 58, 0.5);
+}
+
+.rec-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ============================== 8. 遥测面板 ============================== */
+
+/* 监测面板：录制态是流内岛；空闲态（监控模式）同样是流内岛，排在岛3下方，
+   窗口随之**向下生长**。绝对定位的整窗覆盖层已废弃——
+   那正是"点一下就整块跳出来"的观感来源。 */
+.island.hud {
+  padding: 14px 16px;
+  /* 空闲态要点遮罩关闭，而遮罩是 inset:0 的全窗口层 ⇒ 面板必须抬高到它上面，
+     否则监测面板自己会被遮罩盖住、点不动。 */
+  position: relative;
+  z-index: 1000;
+  /* "向下展开"的观感：从顶部往下揭开（clip-path 只影响绘制、不改布局 ⇒
+     尺寸联动量到的仍然是最终高度，不会量到动画中间态）。 */
+  animation: hud-reveal 220ms var(--dock-ease) both;
+}
+
+@keyframes hud-reveal {
+  from {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.hud-timer {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+}
+
+.hud-caption {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--dock-text-muted);
+  text-transform: uppercase;
+}
+
+.hud-time {
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 32px;
+  font-weight: 300;
+  line-height: 1.1;
+}
+
+.hud-grid {
+  display: grid;
+  /* 同：`1fr` 会拒绝收缩 ⇒ 指标被挤出窗口；`minmax(0, 1fr)` 才能等分 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.hud-grid.hud-audio {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 6px;
+}
+
+/* 指标微卡里的文本也不许撑开格子 */
+.hud-grid > * {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.hud-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  background: var(--dock-well);
+  border: 1px solid var(--dock-divider);
+  border-radius: 9px;
+}
+
+.hud-metric-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--dock-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-metric-value {
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+
+.hud-warn {
+  border-color: rgba(255, 159, 10, 0.4);
+}
+
+.hud-warn .hud-metric-label,
+.hud-warn .hud-metric-value {
+  color: var(--dock-accent-amber);
+}
+
+.hud-line {
+  margin: 10px 2px 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.muted {
+  color: var(--dock-text-secondary);
+}
+
+/* ============================== 9. 设置形态（DOM Popover） ============================== */
+
+/* Popover 遮罩：透明、点击即关闭（它盖住三岛时，点岛=关闭 popover，不触发拖拽） */
+.popover-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 900;
+  background: transparent;
+}
+
+/* DOM Popover 基座：
+   ⚠️ 它只是 DOM 面板——绝不创建新窗口、绝不触发主窗口 setSize */
+.dock-popover {
+  position: absolute;
+  z-index: 1000;
+  background: rgba(24, 31, 43, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4);
+  overflow-y: auto;
+  animation: island-in 200ms var(--dock-ease);
+}
+
+/* Popover 的滚动条：4px 细条、平时近隐形 */
+.dock-popover::-webkit-scrollbar {
+  width: 4px;
+}
+.dock-popover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 2px;
+}
+.dock-popover::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 遥测覆盖层（监控模式）已改为流内岛：排在岛3下方、窗口向下生长。
+   ⚠️ 不要再把它改回 `inset: 8px` 的整窗覆盖层 —— 那是"整块跳出来"的根源。 */
+
+/* 设置面板内容体 */
+.settings-body {
+  padding: 10px 12px;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.settings-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.settings-label {
+  font-size: 12px;
+  color: var(--dock-text-secondary);
+}
+
+.settings-flex {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+select,
+.settings-flex input:not([type='range']) {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--dock-text-primary);
+  border: 1px solid var(--dock-border);
+  border-radius: var(--dock-radius-sm);
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+  transition: var(--dock-transition);
+}
+
+select:hover:not(:disabled),
+.settings-flex input:not([type='range']):hover:not(:disabled) {
+  background: var(--dock-well-hover);
+}
+
+select:focus-visible,
+.settings-flex input:not([type='range']):focus-visible {
+  outline: none;
+  border-color: var(--dock-accent-blue);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.25);
+}
+
+select:disabled,
+input:disabled {
+  opacity: 0.55;
+}
+
+/* 下拉选项在深色玻璃上保持可读（原生弹出列表不吃页面滤镜） */
+select option {
+  background: #1a202c;
+  color: var(--dock-text-primary);
+}
+
+.path-input {
+  font-family: var(--dock-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.coord-input {
+  width: 62px !important;
+  flex: 0 0 auto;
+}
+
+.gain-value {
+  flex: 0 0 auto;
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--dock-text-secondary);
+  width: 34px;
+  text-align: right;
+}
+
+/* 增益滑块（4px 轨道 + 纯白滑块 + 系统蓝填充） */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--dock-accent-blue) var(--sl-fill, 50%),
+    var(--dock-well-hover) var(--sl-fill, 50%)
+  );
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: #fff;
+  border: 0;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+input[type='range']:focus-visible {
+  outline: none;
+}
+
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5), 0 0 0 4px rgba(10, 132, 255, 0.25);
+}
+
+input[type='range']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.settings-msg {
+  margin: 4px 2px 0;
+  font-size: 11.5px;
+}
+
+/* ============================== 10. Toast 与错误 ============================== */
+
+/* Toast / Error 都是 absolute 浮层（契约：UI expansion 用 CSS overlay，
+   不触发主窗口 resize）——盖在岛3下沿，Toast 6 秒自动消失 */
+.dock-toast {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--dock-bg);
+  border: 1px solid rgba(48, 209, 88, 0.3);
+  border-radius: 9999px;
+  box-shadow: var(--dock-shadow);
+  animation: island-in 240ms var(--dock-ease);
+}
+
+.toast-check {
+  color: var(--dock-accent-green);
+  font-weight: 600;
+}
+
+.toast-text {
+  flex: 1 1 0;
+  font-family: var(--dock-font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toast-btn {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--dock-accent-blue);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: var(--dock-transition);
+}
+
+.toast-btn:hover {
+  background: var(--dock-accent-blue-hover);
+}
+
+.dock-error {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 1001;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dock-accent-red);
+  background: rgba(24, 31, 43, 0.96);
+  border: 1px solid rgba(255, 69, 58, 0.3);
+  border-radius: var(--dock-radius-sm);
+  padding: 8px 10px;
+  word-break: break-word;
+}
+
+/* ============================== 11. 框选覆盖层（RegionOverlay 专用，勿动） ============================== */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  cursor: crosshair;
+  user-select: none;
+  overflow: hidden;
+  background: rgba(10, 12, 16, 0.25);
+}
+
+.overlay-dim {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.overlay-rect {
+  position: absolute;
+  border: 2px solid var(--dock-accent-blue);
+  box-shadow: 0 0 12px rgba(10, 132, 255, 0.4);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.overlay-size {
+  position: absolute;
+  top: -28px;
+  left: 0;
+  background: rgba(12, 14, 18, 0.85);
+  color: var(--dock-text-primary);
+  font-family: var(--dock-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--dock-border);
+  white-space: nowrap;
+}
+
+.overlay-hint {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(12, 14, 18, 0.88);
+  border: 1px solid var(--dock-border);
+  color: var(--dock-text-primary);
+  font-size: 14px;
+  padding: 10px 18px;
+  border-radius: 9999px;
+  pointer-events: none;
+}
+
+.overlay-error {
+  color: var(--dock-accent-red);
+}
+
+/* 覆盖层：页面背景必须真透明，否则看不到桌面（红线） */
+html.overlay-mode,
+html.overlay-mode body,
+html.overlay-mode #root {
+  background: transparent !important;
+  overflow: hidden;
+}
+
+.overlay-hover {
+  position: absolute;
+  border: 2px dashed rgba(10, 132, 255, 0.75);
+  background: rgba(10, 132, 255, 0.1);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.overlay-title {
+  position: absolute;
+  top: -26px;
+  left: 0;
+  background: rgba(12, 14, 18, 0.85);
+  color: var(--dock-text-primary);
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--dock-border);
+  white-space: nowrap;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================== 12. 拖拽光标 ============================== */
+
+/* 拖拽手型（数据拖拽区）；按钮等交互控件保持 pointer（它们规则在后，天然覆盖） */
+[data-tauri-drag-region] {
+  cursor: grab;
+}
+[data-tauri-drag-region]:active {
+  cursor: grabbing;
+}
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] select {
+  cursor: pointer;
+}

@@ -1,0 +1,47 @@
+[package]
+name = "screenlite"
+version = "0.1.0"
+description = "ScreenLite — Windows 本地录屏"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "screenlite_lib"
+# 仅 Windows 桌面端：不需要 cdylib/staticlib（那是移动端目标才要的），
+# 保留它们会让 MSVC 链接器产生无关的 .dll.lib/.exp 输出与警告。
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# Tauri CLI 在构建生产版本时会启用它，把前端从 devUrl 切到内嵌资源。
+# 纯 `cargo build --release` 不会启用它 —— 那样产出的 exe 仍会去连
+# localhost:1420（表现为窗口显示 ERR_CONNECTION_REFUSED）。所以：
+# 开发调试：npm run tauri dev
+# 生产构建：npm run tauri build
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+# 注意：不要在这里加 `devtools`——那会把开发者工具带进 release 产物。
+# 需要临时调试时再加，调试完必须回退。
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+screenlite-media = { path = "../crates/screenlite-media" }
+tracing.workspace = true
+tracing-subscriber = "0.3"
+tauri-plugin-dialog = "2.7.3"
+tracing-appender = "0.2.5"
+tauri-plugin-global-shortcut = "2"
+# 把控制窗口排除出录制：`SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`。
+#
+# 版本必须与 tauri 依赖的 windows 大版本一致（当前 tauri 2.11 用 0.61）。
+# 否则依赖图里会同时存在两个 `windows`，两个 `HWND` 是不同类型，
+# 直接传参会报 `expected HWND, found HWND`。
+# 若将来 tauri 升级导致报这个错，把这里的版本号对齐即可（API 本身跨版本稳定）。
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm"] }
+
+[dev-dependencies]
+# 集成测试用 MockRuntime 走真实的 IPC 命令路径（不依赖鼠标坐标）
+tauri = { version = "2", features = ["test"] }

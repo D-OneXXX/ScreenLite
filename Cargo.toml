@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/screenlite-media", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+
+[workspace.dependencies]
+windows = "0.62"
+thiserror = "2"
+tracing = "0.1"
+crossbeam-channel = "0.5"

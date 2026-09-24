@@ -1,0 +1,17 @@
+# 统一换行符，避免 Windows/Linux 之间无意义的整文件 diff
+* text=auto
+
+*.rs    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+
+# 二进制
+*.gif   binary
+*.png   binary
+*.ico   binary
