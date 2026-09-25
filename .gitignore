@@ -1,10 +1,25 @@
-# ---- Rust / Tauri 构建产物 ----
+# ---- Rust / Cargo ----
 /target
 **/*.rs.bk
 
-# ---- 前端构建产物（会被内嵌进二进制，不入库）----
-/dist
+# 调试符号与 MSVC 中间产物（只会在构建目录里生成，这里是兜底）
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.lib
+
+# 覆盖率 / 性能分析
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+
+# ---- 前端 ----
 node_modules/
+/dist
+.vite/
+*.tsbuildinfo
 
 # ---- 运行期产物 ----
 *.log
@@ -14,5 +29,7 @@ node_modules/
 # ---- 编辑器 / 系统 ----
 .vscode/
 .idea/
+*.swp
+*~
 .DS_Store
 Thumbs.db
